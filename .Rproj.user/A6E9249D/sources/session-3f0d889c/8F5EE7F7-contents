@@ -1,0 +1,214 @@
+####################################################################################################
+###
+### File:    02_group_longitudinal_multinomial_experiments.r
+### Purpose: Simple example for simulating data for a 
+###         scenario with individual
+###         polytomous longitudinal data
+### Authors: Gabriel Rodrigues Palma
+### Date:    07/09/23
+###
+####################################################################################################
+# Loading packages -----
+source('00_source.r')
+
+# Creating dataset -----
+create_prob_vector_cont_data_rf <- function(n, j, theta){
+  # This function receives the number of categories 
+  # and creates a vector of probability for each category
+  if(j == 3){
+    x <- rnorm(n) # Covariate
+    u <- rnorm(1, mean = 0, sd = theta)
+    z2 <- 1+0.5*x 
+    z3 <- 0.5+x 
+    den <- 1+exp(z2+u)+exp(z3+u)
+    p1 <- 1/den; p2<-exp(z2+u)/den; p3<-exp(z3+u)/den
+    prob <- cbind(p1,p2,p3)
+    
+  }
+  else if(j == 4){
+    
+    x <- rnorm(n) # Covariate
+    u <- rnorm(1, mean = 0, sd = theta)
+    z2 <- 1+0.5*x
+    z3 <- 0.5+x 
+    z4 <- 1.5 - x
+    den <- 1+exp(z2+u)+exp(z3+u)+exp(z4+u)
+    p1 <- 1/den; p2<-exp(z2+u)/den; p3<-exp(z3+u)/den; p4<-exp(z4+u)/den
+    prob <- cbind(p1,p2,p3, p4)
+    
+  }
+  else{
+    x <- rnorm(n) # Covariate
+    u <- rnorm(1, mean = 0, sd = theta)
+    z2 <- 1+0.5*x
+    z3 <- 0.5+x 
+    z4 <- 1.5 - x
+    z5 <- 1 - 0.7*x
+    den <- 1+exp(z2+u)+exp(z3+u)+exp(z4+u)+exp(z5+u)
+    p1 <- 1/den; p2<-exp(z2+u)/den; p3<-exp(z3+u)/den; p4<-exp(z4+u)/den;p5 <- exp(z5)/den
+    prob <- cbind(p1,p2,p3, p4, p5)
+  }
+  result <- list()
+  result$prob <- prob
+  result$x <- x
+  
+  return(result)
+}
+
+obtain_longitudinal_data_per_individal_grouped <- function(id, j, k,
+                                                           theta, m){
+  # This function creates a longitudinal dataset
+  #for a individual with k time steps
+  # Input: 
+  #       j = Number of categories
+  #       k = Number of evaluated periods
+  #       theta = standard deviation of the random effect     
+  #       m = group of individuals
+  
+  periods <- as.matrix(1:k)
+  longitudinal_polytomous_data_frame <- apply(periods, MARGIN = 1, FUN = function(x){
+    
+    cont_polytomous_data <- create_prob_vector_cont_data_rf(n = 1, 
+                                                            j = j, 
+                                                            theta = theta)
+    x <- cont_polytomous_data$x
+    prob <- cont_polytomous_data$prob
+    
+    y <- t(apply(prob, 1, rmultinom, n=1, size = m))
+    #y_index <-factor(apply(y, 1, function(x) which(x==1))) 
+    
+    longitudinal_polytomous_data_frame <- data.frame(id = id,
+                                                     X = x,
+                                                     Y = y)
+    return(longitudinal_polytomous_data_frame)
+    
+  })
+  
+  longitudinal_polytomous_data_frame <- do.call(rbind, longitudinal_polytomous_data_frame)
+  longitudinal_polytomous_data_frame$Time <- 1:k
+  return(longitudinal_polytomous_data_frame)
+}
+
+cont_polytomous_data <- create_prob_vector_cont_data_rf(n = 10, 
+                                                        j = 4, 
+                                                        theta = 0.01)
+
+create_longitudinal_grouped_polytomous_data <- function(n, j, 
+                                                        k, theta, m){
+  # This function creates a dataset of longitudinal 
+  #polytomous data.
+  #Inputs:
+  #       n = Number of individuals
+  #       j = Number of categories
+  #       k = Number of evaluated periods
+  #       m = group of individuals
+  longitudinal_data <- obtain_longitudinal_data_per_individal_grouped(id = 1, j = j,  k = k, theta = theta, m = m)
+  for (id in 2:n){
+    temp <- obtain_longitudinal_data_per_individal_grouped(id = id, 
+                                                           j = j, 
+                                                           k = k,
+                                                           theta = theta, 
+                                                           m = m)
+    longitudinal_data <- rbind(longitudinal_data, temp)
+  }
+  return(longitudinal_data)
+}
+
+# Individual data
+individual_longitudinal_data <- create_longitudinal_grouped_polytomous_data(n = 10, j = 5, k = 4, theta = 0.01, m = 15)
+View(individual_longitudinal_data)
+
+####################################################################################################
+################################### Simulating overdispersion ######################################
+####################################################################################################
+get_dispersion_index <- function(m, data, j){
+  # This function computes the proposed dispersion index
+  
+  var_obs <- data %>% 
+    pivot_longer(cols = 3:(3+j-1)) %>%
+    group_by(Time, name) %>%
+    summarise(var = var(value))%>%
+    pivot_wider(names_from = name, values_from = var)
+  
+  var_exp <- data %>% 
+    pivot_longer(cols = 3:(3+j-1)) %>%
+    group_by(Time, name) %>%
+    summarise(var = mean(value)*(m - mean(value))/m) %>%
+    pivot_wider(names_from = name, values_from = var)
+  mean(apply(as.matrix(var_obs[2:4])/as.matrix(var_exp[2:4]), MARGIN = 2, mean))
+  
+} 
+get_dispersion_index(m = 16, data = Dados, j = 3)
+############################ n = 100 | j = 3 | k = 3 | theta = 0.1 #################################
+dispersion_j3_theta_0.1_k3 <- numeric(1000) 
+n <- 100
+j <- 3
+k <- 4
+theta <- 0.01
+m <- 10
+for (rep in 1:1000){
+  data <- create_longitudinal_grouped_polytomous_data(n = n, j = j, k = k,
+                                                      theta = theta, m = m)
+  dispersion_j3_theta_0.1_k3[rep] <- get_dispersion_index(m = m, data = data, j = j)
+  
+}
+dispersion_j3_theta_0.1_k3 <- data.frame(index = dispersion_j3_theta_0.1_k3, 
+                                         n = rep('100', 1000), 
+                                         j = rep('3', 1000), 
+                                         k = rep('3', 1000), 
+                                         theta = rep('0.01', 1000))
+############################ n = 100 | j = 3 | k = 3 | theta = 10 #################################
+dispersion_j3_theta_10_k3 <- numeric(1000) 
+n <- 100
+j <- 3
+k <- 4
+theta <- 10
+for (rep in 1:1000){
+  data <- create_longitudinal_grouped_polytomous_data(n = n, j = j, k = k,
+                                                      theta = theta, m = m)
+  dispersion_j3_theta_10_k3[rep] <- get_dispersion_index(m = m, data = data, j = j)
+  
+}
+dispersion_j3_theta_10_k3 <- data.frame(index = dispersion_j3_theta_10_k3, 
+                                        n = rep('100', 1000), 
+                                        j = rep('3', 1000), 
+                                        k = rep('3', 1000), 
+                                        theta = rep('10', 1000))
+
+
+dataset <- rbind(dispersion_j3_theta_0.1_k3, 
+                 dispersion_j3_theta_10_k3)
+dataset %>%
+  ggplot(mapping = aes(y = index)) +
+  geom_boxplot() +
+  facet_wrap(~theta) +
+  theme_bw() +
+  ylab('Proposed index')
+
+dataset %>% 
+  ggplot(mapping = aes(x = index)) +
+  geom_histogram() +
+  facet_wrap(~theta)+
+  theme_bw() +
+  ylab('Proposed index')
+
+
+#Analise Exploratoria IS
+
+(round((maximo <- max(dispersion_j3_theta_0.1_k3$index)),2))
+(round((minimo <- min(dispersion_j3_theta_0.1_k3$index)),2))
+(round((amp <- max(dispersion_j3_theta_0.1_k3$index)-min(dispersion_j3_theta_0.1_k3$index)),2))
+(round((media <- mean(dispersion_j3_theta_0.1_k3$index)),2))
+(round((SE <- sd(dispersion_j3_theta_0.1_k3$index)),2))
+
+
+(round((maximo <- max(dispersion_j3_theta_10_k3$index)),2))
+(round((minimo <- min(dispersion_j3_theta_10_k3$index)),2))
+(round((amp <- max(dispersion_j3_theta_10_k3$index)-min(dispersion_j3_theta_10_k3$index)),2))
+(round((media <- mean(dispersion_j3_theta_10_k3$index)),2))
+(round((SE <- sd(dispersion_j3_theta_10_k3$index)),2))
+
+lattice::histogram(dispersion_j3_theta_0.1_k3$index, xlab = "Indice de Dispersão", ylab = "Porcentagem total")
+
+lattice::histogram(dispersion_j3_theta_10_k3$index, xlab = "Indice de Dispersão", ylab = "Porcentagem total")
+
