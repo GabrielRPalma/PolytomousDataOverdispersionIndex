@@ -1,158 +1,94 @@
 ####################################################################################################
 ###
 ### File:    01_case_study.R
-### Purpose: Case study for longitudinal multinomial data analysis
+### Purpose: Case study for longitudinal multinomial data analysis (pig behaviour,
+###          input_data/Dados2.csv). The expected variance of the dispersion
+###          index is obtained with the closed form expression.
 ### Authors: Maria Leticia and Gabriel Rodrigues Palma and ...
 ### Date:    01/11/23
 ###
 ####################################################################################################
-# source packages ----
-source('00_source.r')
-library(ggplot2)
-library(magrittr)
-library(mclogit)
-library(tidyverse)
+# Loading packages and functions -----
+source("00_source.r")
 
-compute_disersion_index <- function(){
-  #This function will compute the dispersion index among longitudinal multivariate data
-  #Input:
-  #     observed_varience: A vector with means of the observed varience per individual
-  #                       computed per category. 
-  #     expected_variance: The variance expected by the multinomial model with random effects
-  #Output:
-  #     index: Value of the index
-}
-# Reading files ----
-Dados <- read.csv2("input_data/Dados2.csv") %>% 
-  mutate(baia = factor(baia),
-         trat = factor(trat),
-         dia = factor(dia),
-         hora = factor(hora))
-str(Dados)
+# Reading data -----
+pig_data <- read.csv2("input_data/Dados2.csv") %>%
+  mutate(across(c(baia, trat, dia, hora), factor))
+str(pig_data)
 
-# Passa do formato largo (wide) pro formato longo (long)
-dados_long <- Dados %>% 
-  gather(key = "categoria", value = "valor",
-         -baia, -trat, -dia, -hora)
-str(dados_long)
+# Long format: one row per pen (baia), treatment, day, hour and behaviour category
+pig_data_long <- pig_data %>%
+  pivot_longer(cols = c(repousar, comer, explorar),
+               names_to = "categoria", values_to = "valor")
+str(pig_data_long)
 
+# Descriptive analysis -----
+# Range, mean and variance per pen (baia), treatment and category
+summary_by_pen <- pig_data_long %>%
+  group_by(baia, trat, categoria) %>%
+  summarise(amp = max(valor) - min(valor),
+            me = mean(valor),
+            va = var(valor),
+            .groups = "drop")
 
-# ANÁLISE DESCRITIVA ------------------------------------------------------
-#Media - tempo
-resumo <- dados_long %>% 
-  group_by(baia,trat, categoria) %>% 
-  summarise(amp= max(valor)-min(valor),
-            me = mean(valor), 
-            va = var(valor)
-  ) %>% 
-  ungroup()
+# Range, mean and variance per day (dia), treatment and category
+summary_by_day <- pig_data_long %>%
+  group_by(dia, trat, categoria) %>%
+  summarise(amp = max(valor) - min(valor),
+            me = mean(valor),
+            va = var(valor),
+            .groups = "drop")
+if (interactive()) View(summary_by_day)
 
-#Media - Baia
-resumo <- dados_long %>% 
-  group_by(dia, trat, categoria) %>% 
-  summarise(amp= max(valor)-min(valor),
-            me = mean(valor), 
-            va = var(valor)
-  ) %>% 
-  ungroup()
-
-
-View(resumo)
-
-
-# MODELOS -----------------------------------------------------------------
-mod1 <- mblogit(cbind(repousar, comer, explorar) ~ 1, 
-                data = Dados, random = ~1|baia)
+# Multinomial models with random effects (mclogit) -----
+mod1 <- mblogit(cbind(repousar, comer, explorar) ~ 1,
+                data = pig_data, random = ~ 1 | baia)
 mod1$info.coef
-predict(mod1, type = 'response')
+predict(mod1, type = "response")
 summary(mod1)
 
-mod2 <- mblogit(cbind(repousar, comer, explorar) ~ trat, 
-                data = Dados, random = ~1|baia)
-predict(mod2, type = 'link')
+mod2 <- mblogit(cbind(repousar, comer, explorar) ~ trat,
+                data = pig_data, random = ~ 1 | baia)
+predict(mod2, type = "link")
 
+mod3 <- mblogit(cbind(repousar, comer, explorar) ~ trat,
+                data = pig_data, random = ~ 1 | dia)
+predict(mod3, type = "link")
 
-mod3 <- mblogit(cbind(repousar, comer, explorar) ~ trat, 
-                data = Dados, random = ~1|dia)
-predict(mod3, type = 'link')
-
-1-exp(eta)/1 + sum()
-
-eta1 <- -1.512194 
-eta2 <- -0.7599371
-
-get_probabilities <- function(x){
-  # This function computes the probabilities for a given value of etas for the case study
-  eta1 <- x[1]
-  eta2 <- x[2]
-  probs1 <- exp(eta1) / (1 + sum(exp(eta1), exp(eta2)))
-  probs2 <- exp(eta2) / (1 + sum(exp(eta1), exp(eta2)))
-  probs3 <- 1/(1 + sum(exp(eta1), exp(eta2)))
-  return(c(probs1, probs2, probs3))
-  
-}
-
-etas <- predict(mod3, type = 'link')
+# Expected variances from the fitted probabilities -----
+m <- 16 # Number of times the response variables were recorded per group
+etas <- predict(mod3, type = "link")
 probs <- t(apply(as.matrix(etas), MARGIN = 1, FUN = get_probabilities))
-probs_rep1
-m <- 16 # Computed based on the number of times that the response varaibles was computed
+get_expected_variance_from_probabilities(probabilities = probs, m = m)
 
-var1 <- probs_rep1[1] * (1-probs_rep1[1]) * m
-var2 <- probs_rep1[2] * (1-probs_rep1[2]) * m
-var3 <- probs_rep1[3] * (1-probs_rep1[3]) * m
+# Dispersion index: three forms of the expected variance -----
+categories <- c("repousar", "comer", "explorar")
 
-get_variances <- function(probs, m){
-  # This function computes the expected variance based on a grouped polytomous data
-  #Input: 
-  #     probs: a vector of probabilities for each category, J
-  #     m: number of individuals per group
-  #Output:
-  #     variances: a vector of variances per category, J
-  variances <- apply(probs, MARGIN = 1, FUN = function(pi){
-                    var1 <- pi[1] * (1-pi[1]) * m
-                    var2 <- pi[2] * (1-pi[2]) * m
-                    var3 <- pi[3] * (1-pi[3]) * m
-                    return(c(var1, var2, var3))
-                    
-                  })
-  return(t(variances))
-  
-}
-get_variances(probs = probs, m = 16)
+# 1. Closed form: mean(y) * (m - mean(y)) / m at each day
+get_dispersion_index_closed_form(data = pig_data,
+                                 time = "dia",
+                                 categories = categories,
+                                 m = m)
 
-#######################################################################################################
-######################################## Main code for the dispersion #################################
-#######################################################################################################
-m <- 16
-var_obs <- Dados %>% 
-           pivot_longer(cols = 5:7) %>%
-           group_by(dia, name) %>%
-           summarise(var = var(value))%>%
-             pivot_wider(names_from = name, values_from = var)
+# 2. Multinomial model fitted at each day (nnet::multinom), predicted at the
+#    levels of the treatment
+get_dispersion_index_multinomial(
+  data = pig_data,
+  time = "dia",
+  categories = categories,
+  m = m,
+  formula = cbind(repousar, comer, explorar) ~ trat,
+  newdata_fun = function(data) expand.grid(trat = levels(data$trat))
+)
 
-var_exp <- Dados %>% 
-  pivot_longer(cols = 5:7) %>%
-  group_by(dia, name) %>%
-  summarise(var = mean(value)*(m - mean(value))/m) %>%
-    pivot_wider(names_from = name, values_from = var)
-mean(apply(as.matrix(var_obs[2:4])/as.matrix(var_exp[2:4]), MARGIN = 2, mean))
-
-get_dispersion_index <- function(m, data, j){
-  # This function computes the proposed dispersion index
-  
-  var_obs <- data %>% 
-    pivot_longer(cols = 3:(3+j-1)) %>%
-    group_by(Time, name) %>%
-    summarise(var = var(value))%>%
-    pivot_wider(names_from = name, values_from = var)
-  
-  var_exp <- data %>% 
-    pivot_longer(cols = 3:(3+j-1)) %>%
-    group_by(Time, name) %>%
-    summarise(var = mean(value)*(m - mean(value))/m) %>%
-    pivot_wider(names_from = name, values_from = var)
-  mean(apply(as.matrix(var_obs[2:4])/as.matrix(var_exp[2:4]), MARGIN = 2, mean))
-  
-}
-get_dispersion_index(m = 16, data = Dados, j = 3)
-# Simulate grouped data with and without dispersion
+# 3. Random effects multinomial model fitted to the whole data set
+#    (mclogit::mblogit, random intercept per pen, as mod1), probabilities of
+#    each observation conditional on the estimated random effects
+get_dispersion_index_mixed(
+  data = pig_data,
+  time = "dia",
+  categories = categories,
+  m = m,
+  formula = cbind(repousar, comer, explorar) ~ 1,
+  random = ~ 1 | baia
+)
